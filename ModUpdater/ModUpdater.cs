@@ -1,7 +1,8 @@
-﻿using HMLLibrary;
+using HMLLibrary;
 using Newtonsoft.Json.Linq;
 using RaftModLoader;
 using System;
+using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -41,6 +42,7 @@ public class ModUpdater : Mod
 	private Harmony harmony = null;*/
 
 	public static bool DidAtLeastOneUpdate = false;
+	public static bool HasNewDependency = false;
 
 
 	public static List<ModCache> modCache = new List<ModCache>();
@@ -339,7 +341,8 @@ public class ModUpdater : Mod
 			Task UpdateTask = (Task)CheckForUpdateFunc(HMLLibrary.ModManagerPage.modList[i].jsonmodinfo.name);
 			await UpdateTask;
 
-
+			Task DependencyTask = (Task)CheckForDependenciesFunc(ModManagerPage.modList[i].jsonmodinfo.name);
+			await DependencyTask;
 
 
 
@@ -393,6 +396,10 @@ public class ModUpdater : Mod
 		if (DidAtLeastOneUpdate)
 		{
 			notification3 = FindObjectOfType<HNotify>().AddNotification(HNotify.NotificationType.normal, "Finished Updating! Restart the Game!", 5, HNotify.CheckSprite);
+		}
+		else if (HasNewDependency)
+        {
+			notification3 = FindObjectOfType<HNotify>().AddNotification(HNotify.NotificationType.normal, "Finished downloading dependencies! Restart the Game!", 5, HNotify.CheckSprite);
 		}
 		else
 		{
@@ -692,6 +699,133 @@ public class ModUpdater : Mod
 
 	}
 
+	public static async Task CheckForDependenciesFunc(string modname)
+	{
+		HNotification notification5;
+
+		int index = 9999;
+
+		UtilityMethods.DebugLogging("[Modupdater] Check for dependencies for " + modname);
+
+		for (int i = 0; i < ModManagerPage.modList.ToArray().Length; i++)
+		{
+			if (ModManagerPage.modList[i].jsonmodinfo.name == modname)
+			{
+				index = i;
+			}
+		}
+
+		if (index == 9999)
+		{
+			UtilityMethods.DebugLogging("[Modupdater] The mod failed to check for dependencies! Does it even exist?");
+			
+			ModManagerPage.modList[index].modinfo.versionTooltip.GetComponentInChildren<TMPro.TMP_Text>().text = "Unknown";
+
+			ModManagerPage.modList[index].modinfo.ModlistEntry.transform.Find("ModVersionText").GetComponent<UnityEngine.UI.Text>().color = ModManagerPage.orangeColor;
+		}
+		else
+        {
+			JSONObject modJson = null;
+			foreach (var f in ModManagerPage.modList[index].modinfo.modFiles)
+				if (f.Key.ToLower().EndsWith("modinfo.json"))
+                {
+					try
+					{
+						Assembly.GetExecutingAssembly().GetType("F");
+						modJson = new JSONObject(Encoding.Default.GetString(f.Value));
+						break;
+					}
+					catch { }
+				}
+			if (modJson == null)
+				Debug.LogWarning($"Failed to find/read modjson file for {ModManagerPage.modList[index].jsonmodinfo.name}");
+			else if (modJson.HasField("dependencies"))
+            {
+				List<DependencyMod> dMods = GetModDependencies(modJson.GetField("dependencies"));
+
+				foreach (DependencyMod dMod in dMods)
+                {
+					if (!dMod.downloaded)
+                    {
+						UnityWebRequest uwr = UnityWebRequest.Get(dMod.version_url);
+						await uwr.SendWebRequest();
+
+						if (uwr.isNetworkError)
+						{
+							UtilityMethods.DebugLogging("[Modupdater] Error While Sending: " + uwr.error);
+							UtilityMethods.DebugLogging("[Modupdater] Couldn't download dependency mod: " + dMod.slug);
+						}
+						else
+						{
+							//Debug.Log("Received: " + uwr.downloadHandler.text);
+							WWWResult = uwr.downloadHandler.text;
+							//Debug.Log(WWWResult.ToString());
+
+							if (WWWResult.ToString().ToLower().Contains("404"))
+							{
+								UtilityMethods.DebugLogging($"[Modupdater] Mod {dMod.slug} not found on Raftmodding Server.");
+							}
+
+
+							UnityWebRequest uwrr = new UnityWebRequest(dMod.download_url);
+							uwrr.downloadHandler = new DownloadHandlerBuffer();
+							UtilityMethods.DebugLogging($"[Modupdater] Downloading {dMod.slug}...");
+							await uwrr.SendWebRequest();
+
+							if (uwrr.isNetworkError)
+							{
+								UtilityMethods.DebugLogging("[Modupdater] Error While Sending: " + uwrr.error);
+								UtilityMethods.DebugLogging($"[Modupdater] Couldn't update mod: {dMod.slug} No bytes found!");
+							}
+							else
+							{
+								HasNewDependency = true;
+								string filename = $"modinstaller.{dMod.slug}.rmod";
+								byte[] results = uwrr.downloadHandler.data;
+
+								UtilityMethods.DebugLogging(filename);
+
+								File.WriteAllBytes(Temppath + @"\" + filename, results);
+
+								File.Copy(Temppath + @"\" + filename, @"mods\" + filename, true);
+								UtilityMethods.DebugLogging("[Modupdater] Finished Downloading " + dMod.slug);
+								notification5 = FindObjectOfType<HNotify>().AddNotification(HNotify.NotificationType.normal, "Finished Downloading " + dMod.slug, 5, HNotify.CheckSprite);
+							}
+						}
+					}
+				}
+            }
+		}
+
+	}
+
+	public static List<DependencyMod> GetModDependencies(JSONObject dependencies)
+    {
+		List<DependencyMod> dMods = new List<DependencyMod> { };
+
+		if (dependencies.IsArray)
+        {
+			for (int i = 0; i < dependencies.list.Count; i++)
+            {
+				JSONObject d = dependencies.list[i];
+
+                DependencyMod dMod = new DependencyMod
+                {
+                    slug = d.str
+                };
+
+                dMod.download_url = "https://www.raftmodding.com/mods/" + dMod.slug + "/download?ignoreVirusScan=true";
+				dMod.version_url = "https://www.raftmodding.com/api/v1/mods/" + dMod.slug + "/version.txt";
+
+				foreach(ModData md in ModManagerPage.modList)
+                    if (md.jsonmodinfo.updateUrl.Split('/')[6] == dMod.slug) dMod.downloaded = true;
+
+				dMods.Add(dMod);
+			}
+        }
+
+		return dMods;
+    }
 
 	public static async Task UpdateModFunc(string modname, bool OneModOnly)
 	{
@@ -931,6 +1065,14 @@ public class ModCache
 
 }
 
+
+public class DependencyMod
+{
+	public string slug;
+	public string download_url;
+	public string version_url;
+	public bool downloaded;
+}
 
 
 
