@@ -46,6 +46,7 @@ public class ModUpdater : Mod
 
 
 	public static List<ModCache> modCache = new List<ModCache>();
+	public static List<String> dependenciesSlug = new List<String>();
 
 	GameObject disclaimerWin;
 
@@ -731,7 +732,6 @@ public class ModUpdater : Mod
                 {
 					try
 					{
-						Assembly.GetExecutingAssembly().GetType("F");
 						modJson = new JSONObject(Encoding.Default.GetString(f.Value));
 						break;
 					}
@@ -745,7 +745,7 @@ public class ModUpdater : Mod
 
 				foreach (DependencyMod dMod in dMods)
                 {
-					if (!dMod.downloaded)
+					if (!dMod.downloaded && !dependenciesSlug.Contains(dMod.slug))
                     {
 						UnityWebRequest uwr = UnityWebRequest.Get(dMod.version_url);
 						await uwr.SendWebRequest();
@@ -792,9 +792,17 @@ public class ModUpdater : Mod
 								notification5 = FindObjectOfType<HNotify>().AddNotification(HNotify.NotificationType.normal, "Finished Downloading " + dMod.slug, 5, HNotify.CheckSprite);
 							}
 						}
-					}
+					} else
+                    {
+						UtilityMethods.DebugLogging("[ModUpdater] Mod " + dMod.slug + " already downloaded previously");
+                    }
 				}
-            }
+
+				foreach (DependencyMod dMod in dMods)
+				{
+					if (!dependenciesSlug.Contains(dMod.slug)) dependenciesSlug.Add(dMod.slug);
+				}
+			}
 		}
 
 	}
